@@ -100,12 +100,12 @@ commander
       serviceName: packageMetadata.name,
       serviceDescription: packageMetadata.description,
       dnsName: 'mcp',
-      hostedName: 'adventuresindevps.com'
+      hostedName: 'adventuresindevops.com'
     };
     const route53Client = new Route53Client({ region: REGION });
     const command = new ListHostedZonesByNameCommand({ DNSName: parameters.hostedName });
     const response = await route53Client.send(command);
-    const hostedZoneId = response.HostedZones[0].Id.replace('/hostedzone/', '');
+    const hostedZoneId = response.HostedZones.find(hz => hz.Name === parameters.hostedName).Id.replace('/hostedzone/', '');
     parameters.hostedZoneId = hostedZoneId;
     await awsArchitect.deployTemplate(stackTemplate, stackConfiguration, parameters);
 
