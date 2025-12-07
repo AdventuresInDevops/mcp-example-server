@@ -36,9 +36,6 @@ jobs:
     - name: Install packages
       run: yarn
 
-    - name: Run Setup
-      run: yarn setup
-
     - name: Deploy
       if: github.repository_owner == 'adventuresindevops' && github.ref == 'refs/heads/main' && github.event_name == 'push'
       run: yarn deploy
