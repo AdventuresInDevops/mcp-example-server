@@ -68,8 +68,8 @@ commander
 .description('Deploy to AWS.')
 .action(async () => {
   /* Local Configuration */
-  process.env.CI_COMMIT_REF_SLUG = 'main';
-  process.env.CI_PIPELINE_ID = Math.round(Date.now() / 1000 / 60);
+  // process.env.CI_COMMIT_REF_SLUG = 'main';
+  // process.env.CI_PIPELINE_ID = Math.round(Date.now() / 1000 / 60);
   /***********************/
 
   if (!process.env.CI_COMMIT_REF_SLUG) {
