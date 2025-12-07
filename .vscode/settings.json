@@ -1,0 +1,11 @@
+{
+    "cSpell.words": [
+        "adventuresindevps",
+        "livemode",
+        "MANCER",
+        "modulemancer"
+    ],
+    "cSpell.ignoreRegExpList": [
+        "/\\w+([0-9]+\\w*)+/"
+    ],
+}

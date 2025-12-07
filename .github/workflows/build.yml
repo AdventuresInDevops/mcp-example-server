@@ -1,0 +1,44 @@
+on:
+  workflow_dispatch:
+  push:
+    branches:
+    - main
+    - 'release/**'
+
+
+permissions:
+  contents: write
+  pull-requests: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Configure AWS Credentials
+      if: github.repository_owner == 'adventuresindevops' && github.ref == 'refs/heads/main'
+      uses: aws-actions/configure-aws-credentials@v5.0.0
+      with:
+        aws-region: us-east-1
+        role-duration-seconds: 3600
+        audience: sts.amazonaws.com
+        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubRunnerAssumedRole
+        role-session-name: GitHubRunner-${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_number }}
+
+    - name: Install packages
+      run: yarn
+
+    - name: Run Setup
+      run: yarn setup
+
+    - name: Deploy
+      if: github.repository_owner == 'adventuresindevops' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: yarn deploy

@@ -1,0 +1,368 @@
+export default {
+  AWSTemplateFormatVersion: '2010-09-09',
+  Description: 'AWS Architect Microservice',
+  Parameters: {
+    serviceName: {
+      Type: 'String',
+      Description: 'The name of the microservice'
+    },
+    serviceDescription: {
+      Type: 'String',
+      Description: 'Service description used for AWS resources'
+    },
+    dnsName: {
+      Type: 'String',
+      Default: '',
+      Description: 'The service DNS name.'
+    },
+    hostedName: {
+      Type: 'String',
+      Description: 'The top level domain name.'
+    },
+    hostedZoneId: {
+      Type: 'String',
+      Description: 'The zone for the top level domain.'
+    }
+  },
+
+  Resources: {
+    LambdaFunction: {
+      Type: 'AWS::Lambda::Function',
+      Properties: {
+        FunctionName: { Ref: 'serviceName' },
+        Description: { Ref: 'serviceDescription' },
+        Handler: 'index.handler',
+        Runtime: 'nodejs22.x',
+        LoggingConfig: {
+          LogGroup: { Ref: 'CloudWatchLambdaLogGroup' }
+        },
+        TracingConfig: {
+          Mode: 'PassThrough'
+        },
+        Code: {
+          ZipFile: 'exports.handler = async() => Promise.resolve()'
+        },
+        MemorySize: 1769,
+        Timeout: 30,
+        Role: { 'Fn::GetAtt': ['LambdaRole', 'Arn'] },
+        Tags: [
+          {
+            Key: 'Service',
+            Value: { Ref: 'serviceName' }
+          }
+        ]
+      }
+    },
+    LambdaRole: {
+      Type: 'AWS::IAM::Role',
+      Properties: {
+        RoleName: {
+          'Fn::Sub': '${serviceName}LambdaRole'
+        },
+        AssumeRolePolicyDocument: {
+          Version: '2012-10-17',
+          Statement: [
+            {
+              Effect: 'Allow',
+              Principal: {
+                Service: ['lambda.amazonaws.com']
+              },
+              Action: ['sts:AssumeRole']
+            }
+          ]
+        },
+        ManagedPolicyArns: [
+          'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole',
+          'arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess'
+        ],
+        Policies: [
+          {
+            PolicyName: 'MicroservicePolicy',
+            PolicyDocument: {
+              Version: '2012-10-17',
+              Statement: [
+                {
+                  Sid: 'DynamoDbWrite',
+                  Effect: 'Allow',
+                  Action: 'dynamodb:*',
+                  Resource: {
+                    'Fn::Sub': 'arn:aws:dynamodb:*:*:table/${serviceName}-*'
+                  }
+                },
+                {
+                  Sid: 'DynamoDbWritePreventDelete',
+                  Effect: 'Deny',
+                  Action: [
+                    'dynamodb:DeleteBackup',
+                    'dynamodb:DeleteTable'
+                  ],
+                  Resource: '*'
+                },
+                {
+                  Sid: 'SQSReader',
+                  Effect: 'Allow',
+                  Action: 'sqs:*',
+                  Resource: {
+                    'Fn::Sub': 'arn:aws:sqs:*:*:${serviceName}-*'
+                  }
+                },
+                {
+                  Sid: 'KMSdecryption',
+                  Effect: 'Allow',
+                  Action: 'kms:Decrypt',
+                  Resource: [{
+                    'Fn::Sub': 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/cd40f0e6-058e-4b9b-a2a1-8b7b2c43bf16'
+                  },
+                  { 'Fn::Sub': 'arn:aws:kms:*:*:key/mrk-41afe28bacf14084bb74890c1f6216bb' }]
+                },
+                {
+                  Sid: 'AssumeAwsMarketplaceIntegrationRole',
+                  Effect: 'Allow',
+                  Action: 'sts:AssumeRole',
+                  Resource: 'arn:aws:iam::800356374968:role/MarketplaceIntegrationService-us-east-1-MarketplaceIntegration'
+                },
+                {
+                  Sid: 'DelegatedAwsMarketplaceIntegration',
+                  Effect: 'Allow',
+                  Action: 'aws-marketplace:*',
+                  Resource: '*'
+                }
+              ]
+            }
+          }
+        ],
+        Path: '/'
+      }
+    },
+
+    LambdaFunctionVersion: {
+      Type: 'AWS::Lambda::Version',
+      Properties: {
+        FunctionName: { Ref: 'LambdaFunction' },
+        Description: 'Initial Production Deployed Version'
+      }
+    },
+    ProductionAlias: {
+      Type: 'AWS::Lambda::Alias',
+      Properties: {
+        Description: 'The production alias',
+        FunctionName: { 'Fn::GetAtt': ['LambdaFunction', 'Arn'] },
+        FunctionVersion: { 'Fn::GetAtt': ['LambdaFunctionVersion', 'Version'] },
+        Name: 'production'
+      }
+    },
+
+    CloudWatchLambdaLogGroup: {
+      Type: "AWS::Logs::LogGroup",
+      Properties: {
+        LogGroupName: { "Fn::Sub": "/aws/lambda/${serviceName}" },
+        RetentionInDays: 365
+      }
+    },
+
+    // AggregateLogEventsSubscription: {
+    //   Type: 'AWS::Logs::SubscriptionFilter',
+    //   Properties: {
+    //     // We need a secure way of passing in the AccountId without making it public for the world
+    //     DestinationArn: { 'Fn::Sub': 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:LogStreamCollector:production' },
+    //     FilterPattern: '[timestamp=REPORT||timestamp=*Z||timestamp=* && timestamp != START && timestamp != INIT_START && timestamp != END, request_id, event]',
+    //     LogGroupName: { Ref: 'CloudWatchLambdaLogGroup' }
+    //   }
+    // },
+
+    ApiGateway: {
+      Type: 'AWS::ApiGatewayV2::Api',
+      Properties: {
+        FailOnWarnings: false,
+        Body: {
+          openapi: '3.0.1',
+          info: {
+            version: '1.0.0',
+            title: { Ref: 'serviceName' },
+            description: { Ref: 'serviceDescription' }
+          },
+          servers: [{
+            'url': '/',
+            'x-amazon-apigateway-endpoint-configuration': { disableExecuteApiEndpoint: true }
+          }],
+          paths: {
+            '/.well-known/openapi.json': {
+              'x-amazon-apigateway-any-method': {
+                'responses': {
+                  default: {
+                    description: 'Default response for ANY /.well-known/openapi.json'
+                  }
+                },
+                'x-amazon-apigateway-integration': {
+                  payloadFormatVersion: '1.0',
+                  type: 'aws_proxy',
+                  httpMethod: 'POST',
+                  uri: { 'Fn::Sub': 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${serviceName}:${!stageVariables.lambdaVersion}/invocations' },
+                  connectionType: 'INTERNET'
+                }
+              }
+            },
+            '/{proxy+}': {
+              options: {
+                'responses': {
+                  default: {
+                    description: 'Default response for OPTIONS /{proxy+}'
+                  }
+                },
+                'parameters': [{
+                  name: 'proxy',
+                  in: 'path',
+                  required: true,
+                  type: 'string'
+                }],
+                'x-amazon-apigateway-integration': {
+                  payloadFormatVersion: '1.0',
+                  type: 'aws_proxy',
+                  httpMethod: 'POST',
+                  uri: { 'Fn::Sub': 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${serviceName}:${!stageVariables.lambdaVersion}/invocations' },
+                  connectionType: 'INTERNET'
+                }
+              }
+            },
+            '/$default': {
+              'x-amazon-apigateway-any-method': {
+                'isDefaultRoute': true,
+                // 'security': [{ self: [] }],
+                'x-amazon-apigateway-integration': {
+                  payloadFormatVersion: '1.0',
+                  type: 'aws_proxy',
+                  httpMethod: 'POST',
+                  uri: { 'Fn::Sub': 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${serviceName}:${!stageVariables.lambdaVersion}/invocations' },
+                  passthroughBehavior: 'when_no_match'
+                }
+              }
+            }
+          },
+          components: {
+            securitySchemes: {
+              self: {
+                'type': 'apiKey',
+                'name': 'Unused',
+                'in': 'header',
+                'x-amazon-apigateway-authorizer': {
+                  identitySource: '$request.header.Authorization,$context.domainPrefix',
+                  authorizerUri: { 'Fn::Sub': 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProductionAlias}/invocations' },
+                  authorizerPayloadFormatVersion: '2.0',
+                  authorizerResultTtlInSeconds: 3600,
+                  type: 'request',
+                  enableSimpleResponses: false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    LambdaInvokePermission: {
+      Type: 'AWS::Lambda::Permission',
+      DependsOn: 'ProductionAlias',
+      Properties: {
+        FunctionName: { Ref: 'ProductionAlias' },
+        Action: 'lambda:InvokeFunction',
+        Principal: 'apigateway.amazonaws.com',
+        SourceArn: { 'Fn::Sub': 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*' }
+      }
+    },
+
+    ApiGatewayInitialDeployment: {
+      Type: 'AWS::ApiGatewayV2::Deployment',
+      Properties: {
+        Description: 'Initial Setup Deployment (WARNING: This resource must stay constant, do not update in CF ever)',
+        ApiId: { Ref: 'ApiGateway' }
+      }
+    },
+    ApiGatewayStage: {
+      Type: 'AWS::ApiGatewayV2::Stage',
+      Properties: {
+        ApiId: { Ref: 'ApiGateway' },
+        AutoDeploy: true,
+        StageName: 'production',
+        DeploymentId: { Ref: 'ApiGatewayInitialDeployment' },
+        StageVariables: {
+          lambdaVersion: 'production'
+        }
+      }
+    },
+
+    AcmCertificate: {
+      Type: 'AWS::CertificateManager::Certificate',
+      Properties: {
+        DomainName: { 'Fn::Sub': '${dnsName}.${hostedName}' },
+        SubjectAlternativeNames: [
+          { 'Fn::Sub': '*.${dnsName}.${hostedName}' }
+        ],
+        ValidationMethod: 'DNS',
+        DomainValidationOptions: [{
+          DomainName: { 'Fn::Sub': '${dnsName}.${hostedName}' },
+          HostedZoneId: { Ref: 'hostedZoneId' }
+        }]
+      }
+    },
+
+    ServiceDomainName: {
+      Type: 'AWS::ApiGatewayV2::DomainName',
+      Properties: {
+        DomainName: { 'Fn::Sub': '${dnsName}.${hostedName}' },
+        DomainNameConfigurations: [{
+          CertificateArn: { Ref: 'AcmCertificate' },
+          EndpointType: 'REGIONAL',
+          SecurityPolicy: 'TLS_1_2',
+          IpAddressType: 'dualstack'
+        }]
+      }
+    },
+    BasePathMapping: {
+      Type: 'AWS::ApiGatewayV2::ApiMapping',
+      Properties: {
+        DomainName: { Ref: 'ServiceDomainName' },
+        ApiId: { Ref: 'ApiGateway' },
+        Stage: { Ref: 'ApiGatewayStage' }
+      }
+    },
+
+    Route53MapToCustomDomain: {
+      Type: 'AWS::Route53::RecordSet',
+      Properties: {
+        AliasTarget: {
+          DNSName: { 'Fn::GetAtt': ['ServiceDomainName', 'RegionalDomainName'] },
+          HostedZoneId: { 'Fn::GetAtt': ['ServiceDomainName', 'RegionalHostedZoneId'] }
+        },
+        HostedZoneName: {
+          'Fn::Sub': '${hostedName}.'
+        },
+        Comment: {
+          'Fn::Sub': 'Created for service ${serviceName}'
+        },
+        Name: {
+          'Fn::Sub': '${dnsName}.${hostedName}.'
+        },
+        Type: 'A'
+      }
+    },
+    Route53MapToCustomDomainIpv6: {
+      Type: 'AWS::Route53::RecordSet',
+      Properties: {
+        AliasTarget: {
+          DNSName: { 'Fn::GetAtt': ['ServiceDomainName', 'RegionalDomainName'] },
+          HostedZoneId: { 'Fn::GetAtt': ['ServiceDomainName', 'RegionalHostedZoneId'] }
+        },
+        HostedZoneName: {
+          'Fn::Sub': '${hostedName}.'
+        },
+        Comment: {
+          'Fn::Sub': 'Created for service ${serviceName}'
+        },
+        Name: {
+          'Fn::Sub': '${dnsName}.${hostedName}.'
+        },
+        Type: 'AAAA'
+      }
+    }
+  }
+};
