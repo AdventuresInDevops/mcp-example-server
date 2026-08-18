@@ -45,16 +45,16 @@ export class Authorizer {
     }
   }
 
-  checkAuthReadiness() {
+  checkAuthReadiness(request) {
     if (this.DISCOVERY_METADATA) {
       return;
     }
-    logger.error({ title: 'Dependency Check Failed: Auth Metadata is null.' });
+    logger.log({ title: 'Dependency Check Failed: Auth Metadata is null, refusing request', level: 'WARN', request });
     throw ApplicationError({
       statusCode: 503,
       body: JSON.stringify({
         error: 'service_unavailable',
-        error_description: 'Critical Auth metadata dependency not initialized. Check server logs for failed fetch from AS.'
+        error_description: 'Auth metadata not initialized.'
       }),
       headers: { 'Content-Type': 'application/json' }
     });

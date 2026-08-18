@@ -70,7 +70,7 @@ function protectedHandler(controllerMethod) {
 function metadataProxyHandler(controllerMethod) {
   return request => {
     // 1. Run Auth readiness check (ensures AS metadata was fetched)
-    authorizer.checkAuthReadiness();
+    authorizer.checkAuthReadiness(request);
 
     // 2. Execute the final controller method
     return controllerMethod(request);
